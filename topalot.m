@@ -1,3 +1,5 @@
+// Notes on Vladmir Uskov's Matlab Code
+
 clear; clc; close all;
 set(gcf, 'color', [.6, .8, .7], 'menubar', 'none');
 set(gca, 'units', 'normal', 'position', [.02, 0, .96, 1]);
