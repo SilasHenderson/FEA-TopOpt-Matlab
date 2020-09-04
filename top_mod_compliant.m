@@ -1,5 +1,5 @@
 %   Compliant mechanism synthesis:
-%   - generate a the lower half of a 'gripper' mechanism
+%   - generate lower half of a 'gripper' mechanism
 
 %   This is a heavily modified version of Sigmund's 99-line
 %   topopt script.  It is slower, and may contain errors.
@@ -53,12 +53,14 @@ x(find(passive)) = minp;
 %------------------------(B) optimization--------------------------------%
 
 k0 = k0make;                                                 %(0) 
-for iter = 1:iterations                                      % start loop    
-    [U]    = fea(nelx,nely,x,p,k0,F,fixeddofs);              %(1)         
-    [c,dc] = compliance(nelx,nely,p,x,k0,U);                 %(2)
-    [dc]   = conefilter(nelx,nely,filterradius,x,dc);        %(3)
-    [x]    = OC(nelx,nely,x,volfrac,dc,passive,minp);        %(4)
-    plotx(x);                                                %(5)
+
+for iter = 1:iterations                                      % start loop  
+
+    [U]    = fea(nelx,nely,x,p,k0,F,fixeddofs);              % (1) displacement        
+    [c,dc] = compliance(nelx,nely,p,x,k0,U);                 % (2) compliance
+    [dc]   = conefilter(nelx,nely,filterradius,x,dc);        % (3) filter
+    [x]    = OC(nelx,nely,x,volfrac,dc,passive,minp);        % (4) update
+    plotx(x);                                                % (5) plot
     iter;
 end                                                          % end loop
 
