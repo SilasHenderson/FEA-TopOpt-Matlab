@@ -1,74 +1,94 @@
-%   Compliant mechanism synthesis:
 %   - generate lower half of a 'gripper' mechanism
 
-%   This is a heavily modified version of Sigmund's 99-line
-%   topopt script.  It is slower, and may contain errors.
+%   This is modified version of Sigmund's 99-line topopt script. 
+%   It is much slower and probably contains errors.
+
+%   Also, 'k0' matrix is derived w/ symbolics within script
 
 %   Re-organized sections as follows:
 
-%       (A) options: choose size, p, filter radius, etc.
-%       (B) optimization: run functions (1),(2),(3),(4),(5) in 'for loop'
-%       (C) functions: 
-%           (0)     assemble k0 matrix
-%           (1)     finite element analysis to find U
-%           (2)     find compliance and compliance gradient
-%           (3)     filter compliance gradient
-%           (4)     optimize element densities (OC)
-%           (5)     plot element densities
+%       Options: 
+%           choose size, p, filter radius, etc.
+%       
+%       Optimization: 
+%           run functions in loop
+%       
+%       Functions: 
+%           - Assemble k0 matrix
+%           - Finite element analysis to find U
+%           - Find compliance and compliance gradient
+%           - Filter compliance gradient
+%           - Optimize element densities (OC)
+%           - Plot element densities
 
-clear
-%------------------------(A) options-------------------------------------%
+clear;
 
-% Mesh properties
-nelx = 90;
-nely = 60;
+%--------------------------- Options-----------------------------------
+
+% Mesh
+nelx = 60;
+nely = 30;
 volfrac = .2;
-x = rand*ones(nely,nelx);
+x = ones(nely,nelx);
 
-% Optimization options
+% Optimization
 p = 3;
 filterradius = 1.5;
-iterations = 60;
+iterations = 100;
 
-% Force vectors
+% Force (in=1, out=2)
 F = sparse(2*(nely+1)*(nelx+1),2); 
 
 % Force in (column 1)
-F(1,1) = 1 ;            
+F(1,1) = 1;            
 
 % Force out (column 2)
-F((2*nely+1)*(nelx)+2*10,2) = 1;
+F( (2*nely+1)*nelx+20, 2) = 1;
 
 % Fixed degrees of freedom
-fixeddofs1 = 2:2*(nely+1):2*(nely+1)*(nelx+1)*3/4;
-fixeddofs2 = 2*(nely+1)-1:2*(nely+1);
-fixeddofs = union(fixeddofs1,fixeddofs2);
+fixed_dof  = union( ...
+     2:2*(nely+1):2*(nely+1)*(nelx+1)*3/4, ...
+     2*(nely+1)-1:2*(nely+1));
 
 % Passive elements
-passive = zeros(nely,nelx);
-passive(1:nely/3,2/3*nelx:nelx) = 1;
-minp = .001;
-x(find(passive)) = minp;
+x_passive = zeros(nely,nelx);
+x_passive(1:nely/3, 2/3*nelx:nelx) = 1;
+
+min_x = .001;
+x(find(x_passive)) = min_x;
   
-%------------------------(B) optimization--------------------------------%
+% Make 'k0' matrix
 
-k0 = k0make;                                                 %(0) 
+k0 = Derive_k0;    
 
-for iter = 1:iterations                                      % start loop  
+%---------------------------- Optimization -------------------------------
 
-    [U]    = fea(nelx,nely,x,p,k0,F,fixeddofs);              % (1) displacement        
-    [c,dc] = compliance(nelx,nely,p,x,k0,U);                 % (2) compliance
-    [dc]   = conefilter(nelx,nely,filterradius,x,dc);        % (3) filter
-    [x]    = OC(nelx,nely,x,volfrac,dc,passive,minp);        % (4) update
-    plotx(x);                                                % (5) plot
-    iter;
-end                                                          % end loop
+% Run iterations
 
-% ----------------------(C) functions------------------------------------%
+for iter = 1:iterations 
+    
+    % Find displacements
+    U = FindDisplacement(nelx,nely,x,p,k0,F,fixed_dof);                    
+    
+    % Find compliance (c) and compliance 'derivative' (dc)
+    [c,dc] = FindCompliance(nelx,nely,p,x,k0,U);                 
+    
+    % Filter compliance derivative
+    dc = ConeFilter(nelx,nely,filterradius,x,dc);       
+    
+    % Update Areas
+    x  = OC(nelx,nely,x,volfrac,dc,x_passive,min_x);        
+    
+    % Plot current structure
+    plotx(x); 
+    
+end                                                         
 
-% (0a) 'k0make':  assemble k0 matrix
+% -------------------------- Functions -------------------------------
 
-function k0 = k0make
+% Derive_k0: derive w/symbolics, return non-symbolic matrix
+
+function k0 = Derive_k0
     
     % Poisson's ratio, elastic modulus
     nu = .3; 
@@ -102,13 +122,13 @@ function k0 = k0make
     k0 = J*E*double(k0);          
 end
 
-% (1) 'fea':  finite element analysis for finding U
+% Find Displacement
 
-function [U] = fea(nelx,nely,x,penal,k0,F,fixeddofs)
+function U = FindDisplacement(nelx,nely,x,penal,k0,F,fixeddofs)
     
     % Init K and U
     K = sparse(2*(nelx+1)*(nely+1), 2*(nelx+1)*(nely+1));
-    U = zeros(2*(nely+1)*(nelx+1),2);
+    U = zeros( 2*(nely+1)*(nelx+1),2);
    
     % Assemble K global
     for elx = 1:nelx                
@@ -117,13 +137,14 @@ function [U] = fea(nelx,nely,x,penal,k0,F,fixeddofs)
             upleftnode  = (nely+1)*(elx-1)+ely; 
             uprightnode = (nely+1)* elx   +ely;
             
-            edof = [ ...
+            el_dof = [ ...
                 2*upleftnode-1;  2*upleftnode;    
                 2*uprightnode-1; 2*uprightnode; 
                 2*uprightnode+1; 2*uprightnode+2; 
                 2*upleftnode+1;  2*upleftnode+2];
             
-            K(edof,edof) = K(edof,edof) + x(ely,elx)^penal*k0;  
+            K(el_dof,el_dof) = ...
+                K(el_dof,el_dof) + x(ely,elx)^penal*k0;  
         end
     end
     
@@ -140,14 +161,14 @@ function [U] = fea(nelx,nely,x,penal,k0,F,fixeddofs)
     U(fixeddofs,:)= 0;
 end
 
-% (2) 'compliance' :  find compliance and compliance gradient
+% FindCompliance: find compliance and compliance gradient
 
-function [c,dc] = compliance(nelx,nely,p,x,k0,U)                                
+function [c,dc] = FindCompliance(nelx,nely,p,x,k0,U)                                
     
-    c = 0.; 
+    c  = 0.; 
     dc = zeros(nely,nelx);   
     
-    % Loop over each element
+    % Loop across each element
     for ely = 1:nely                
         for elx = 1:nelx
             
@@ -165,62 +186,72 @@ function [c,dc] = compliance(nelx,nely,p,x,k0,U)
     end
 end
 
-% (3) 'conefilter':  filter compliance gradient
+% Conefilter:  filter compliance gradient
 
-function [dcfiltered]=conefilter(nelx,nely,radius,x,dc)
+function dcfiltered = ConeFilter(nelx,nely,radius,x,dc)
         
-    % Average each element dc with weighted dcs from neighbor elements
+    % Average each elem's dc with weighted dc's from neighbor elements
     dcfiltered=zeros(nely,nelx);
     
     % Loop over each element 
     for i = 1:nelx                                     
         for j = 1:nely                              
             
-            % Weight (cone height)
-            coneheightsum=0.0;             
+            % get 'weight' (cone height)
+            cone_height_sum=0.0;             
             for k = max(i-floor(radius),1):min(i+floor(radius),nelx)
                 for l = max(j-floor(radius),1):min(j+floor(radius),nely) 
+                    
                     coneheight = radius-sqrt((i-k)^2+(j-l)^2);      
-                    coneheightsum = coneheightsum+max(0,coneheight);
-                    dcfiltered(j,i) = dcfiltered(j,i) + max(0,coneheight)*x(l,k)*dc(l,k);
+                    cone_height_sum = cone_height_sum+max(0,coneheight);
+                    
+                    dcfiltered(j,i) = dcfiltered(j,i) + ...
+                        max(0,coneheight)*x(l,k)*dc(l,k);
                 end
             end
             
             % Average element dc and neighbors dc
-            dcfiltered(j,i) = dcfiltered(j,i)/(x(j,i)*coneheightsum);
+            dcfiltered(j,i) = dcfiltered(j,i)/(x(j,i)*cone_height_sum);
         end
     end
 end
 
-% (4) 'optimize' : bisection method to find good lambda for dC = dC/lambda
+% OC: Update Areas with Optimality Criteria Method
 
-function [xnew]=OC(nelx,nely,x,volfrac,dc,passive,minp)  
+function [x_new]=OC(nelx,nely,x,vol_frac,dc,x_passive,x_min)  
 
-    lambdamin = 0; 
-    lambdamax = 100000; 
+    % Lambda min, max, and 'move' parameter
+    L_min = 0; 
+    L_max = 100000; 
     move = 0.1;
     
-    while (lambdamax-lambdamin)/(lambdamax+lambdamin) > 1e-4 && ...
-           lambdamax + .0001 > 1e-40
+    % Update areas with bisection method
+        
+    while (L_max-L_min)/(L_max+L_min)>1e-4 && L_max+.0001>1e-40
+        
+        x_new(find(x_passive)) = x_min;
+        
+        lambda = (L_max + L_min)/2;
+        
+        x_new = max(0.001, ...
+            max(x-move, ...
+                min(1., ...
+                    min(x+move,x.*(max(1e-10,-dc./lambda)).^0.3))));
     
-        xnew(find(passive)) = minp;
-        lambda = 0.5*(lambdamax+lambdamin);
-        xnew = max(0.001,max(x-move,min(1.,min(x+move,x.*...
-            (max(1e-10,-dc./lambda)).^0.3))));
-    
-        if sum(sum(xnew)) - volfrac*nelx*nely > 0
-            lambdamin = lambda;
+        if sum(sum(x_new)) - vol_frac*nelx*nely > 0
+            L_min = lambda;
         else
-            lambdamax = lambda;
+            L_max = lambda;
         end
         
-        xnew(find(passive)) = minp;
+        x_new(find(x_passive)) = x_min;
     end 
 end
 
-% (5) plotx :  plot element densities
+% PlotUpdate: draw structure with current element densities
 
 function plotx(x)
+    cla;
     colormap(gray); 
     imagesc(-x); 
     pause(.0001);
